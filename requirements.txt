@@ -1,0 +1,127 @@
+# ============================================================
+# TEAMUP REQUIREMENTS
+# Based on SRS Section 11 - Technology Stack Summary
+# ============================================================
+
+# ------------------------------------------------------------
+# APPLICATION FRAMEWORK (SRS Section 5.4, 11)
+# ------------------------------------------------------------
+# Flask: Web framework for REST API
+# Flask-SocketIO: WebSocket support for real-time (FR-4.1)
+# Flask-SQLAlchemy: ORM for PostgreSQL (Section 6.2)
+# Flask-Migrate: Alembic for database migrations (NFR-14)
+# Flask-JWT-Extended: JWT authentication (FR-1.2)
+# Flask-CORS: Cross-origin requests for React client
+Flask==2.3.3
+Flask-SocketIO==5.3.6
+Flask-SQLAlchemy==3.1.1
+Flask-Migrate==4.0.5
+Flask-JWT-Extended==4.5.3
+Flask-CORS==4.0.1
+
+# ------------------------------------------------------------
+# REAL-TIME TRANSPORT (SRS Section 11)
+# ------------------------------------------------------------
+# python-socketio: Socket.IO client/server implementation
+# eventlet: Async framework for WebSocket handling
+# gevent: WSGI server with WebSocket support
+python-socketio==5.9.0
+eventlet==0.33.3
+gevent==23.9.1
+gevent-websocket==0.10.1
+
+# ------------------------------------------------------------
+# PRIMARY DATABASE - PostgreSQL (SRS Section 2.4, 11)
+# ------------------------------------------------------------
+# psycopg2: PostgreSQL adapter for Python
+# SQLAlchemy: ORM (already listed above)
+# alembic: Database migrations (already via Flask-Migrate)
+psycopg2-binary==2.9.9
+SQLAlchemy==2.0.22
+alembic==1.12.1
+
+# ------------------------------------------------------------
+# CACHE / BACKPLANE - Redis (SRS Section 2.4, 6.3, 11)
+# ------------------------------------------------------------
+# Redis: Caching, Socket.IO backplane, rate limiting (FR-7.1)
+redis==5.0.1
+hiredis==2.3.2  # Faster Redis parser
+
+# ------------------------------------------------------------
+# MESSAGE QUEUE - RabbitMQ (SRS Section 2.4, 6.4, 11)
+# ------------------------------------------------------------
+# Celery: Background task processing (FR-8.1)
+# Kombu: RabbitMQ client for Celery
+celery==5.3.4
+kombu==5.3.4
+
+# ------------------------------------------------------------
+# SECURITY (SRS Section 9, NFR-11)
+# ------------------------------------------------------------
+# bcrypt: Password hashing with cost ≥ 12 (NFR-11)
+# PyJWT: JWT token handling (FR-1.2)
+# cryptography: Additional security utilities
+bcrypt==4.0.1
+PyJWT==2.8.0
+cryptography==41.0.7
+
+# ------------------------------------------------------------
+# SERIALIZATION & VALIDATION (SRS Section 9)
+# ------------------------------------------------------------
+# marshmallow: Request/response validation
+# marshmallow-sqlalchemy: Model serialization
+# python-dotenv: Environment variable management
+marshmallow==3.20.1
+marshmallow-sqlalchemy==0.29.0
+python-dotenv==1.0.0
+
+# ------------------------------------------------------------
+# MONITORING & OBSERVABILITY (SRS Section 4.6, NFR-16)
+# ------------------------------------------------------------
+# prometheus-flask-exporter: Metrics endpoint (NFR-16)
+# python-json-logger: Structured logging (NFR-17)
+prometheus-flask-exporter==0.23.1
+python-json-logger==2.0.7
+
+# ------------------------------------------------------------
+# RATE LIMITING (SRS Section 3.7, FR-7.1)
+# ------------------------------------------------------------
+# Flask-Limiter: Rate limiting per user/IP
+# Uses Redis as storage backend
+Flask-Limiter==3.5.0
+
+# ------------------------------------------------------------
+# UTILITIES
+# ------------------------------------------------------------
+# click: Command-line interface utilities
+# python-dateutil: Date/time handling
+# pytz: Timezone support
+# uuid6: Better UUID generation
+click==8.1.7
+python-dateutil==2.8.2
+pytz==2023.3
+uuid6==2023.6.19
+
+# ------------------------------------------------------------
+# DEVELOPMENT & TESTING (SRS Section 4.5)
+# ------------------------------------------------------------
+# pytest: Testing framework
+# pytest-cov: Code coverage (NFR-15)
+# pytest-flask: Flask testing utilities
+# factory-boy: Test data factories
+# faker: Generate test data
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-flask==1.2.0
+factory-boy==3.3.0
+faker==20.0.0
+
+# ------------------------------------------------------------
+# CODE QUALITY (SRS Section 4.5)
+# ------------------------------------------------------------
+# black: Code formatter
+# flake8: Linter
+# mypy: Type checking
+black==23.11.0
+flake8==6.1.0
+mypy==1.7.0
