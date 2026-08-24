@@ -1,0 +1,127 @@
+# ============================================
+# PYTHON COMPILED FILES
+# ============================================
+# When Python runs your code, it creates .pyc files (compiled bytecode)
+# These are like cache files - they're not needed in version control
+# They're specific to your computer and Python version
+__pycache__/          # Python 3 creates this folder for .pyc files
+*.py[cod]             # Any .pyc, .pyo, or .pyd files
+*$py.class            # PyPy compiled files
+
+# ============================================
+# PYTHON PACKAGE DISTRIBUTION FILES
+# ============================================
+# These are created when you build a distributable package
+# They're not needed in the repository
+build/                # Build directory
+develop-eggs/         # Development eggs
+dist/                 # Distribution packages
+downloads/            # Downloaded packages
+eggs/                 # Egg files
+.eggs/                # Hidden egg files
+lib/                  # Library files
+lib64/                # 64-bit library files
+parts/                # Build parts
+sdist/                # Source distribution
+var/                  # Variable files
+wheels/               # Wheel files
+*.egg-info/          # Egg metadata
+.installed.cfg       # Installed configuration
+*.egg                # Egg files
+
+# ============================================
+# VIRTUAL ENVIRONMENT
+# ============================================
+# A virtual environment isolates Python packages for this project
+# It can be recreated with 'pip install -r requirements.txt'
+# So we don't need to commit it (it's huge!)
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ============================================
+# ENVIRONMENT VARIABLES & SECRETS
+# ============================================
+# These contain sensitive information like passwords and API keys
+# NEVER commit these to version control!
+.env                 # Main environment file
+.env.local          # Local overrides
+.env.*.local        # Environment-specific local files
+
+# ============================================
+# DATABASE FILES
+# ============================================
+# SQLite database files - these contain all your data
+# They should be backed up separately, not in Git
+*.db                 # Any database file
+*.sqlite             # SQLite database
+*.sqlite3            # SQLite 3 database
+
+# ============================================
+# IDE & EDITOR FILES
+# ============================================
+# These are specific to your code editor or IDE
+# Each developer might use different tools
+
+# Visual Studio Code
+.vscode/              # VS Code settings
+*.code-workspace     # VS Code workspace files
+
+# PyCharm / IntelliJ
+.idea/                # JetBrains IDE settings
+*.iml                 # Module files
+
+# General editor files
+*.swp                 # Vim swap files
+*.swo                 # Vim swap files
+*~                    # Backup files
+.DS_Store            # MacOS folder metadata
+
+# ============================================
+# LOGS & DEBUG FILES
+# ============================================
+# Log files can get very large and contain debug info
+# Not needed in version control
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ============================================
+# TESTING & COVERAGE FILES
+# ============================================
+# These are generated when running tests
+# They're not source code and can be regenerated
+.pytest_cache/        # Pytest cache
+.coverage             # Coverage report
+htmlcov/              # HTML coverage report
+.tox/                 # Tox testing environment
+.mypy_cache/          # MyPy type checking cache
+.dmypy.json          # Daemon mypy data
+dmypy.json
+
+# ============================================
+# REDIS DATA
+# ============================================
+# Redis saves data to disk in these files
+# Not needed in version control
+dump.rdb              # Redis dump file
+
+# ============================================
+# CELERY TASK SCHEDULER
+# ============================================
+# Celery Beat saves its schedule to these files
+# They're machine-specific
+celerybeat-schedule
+celerybeat.pid
+
+# ============================================
+# STATIC & MEDIA FILES
+# ============================================
+# User-uploaded files or generated assets
+# These should be stored in cloud storage (S3, etc.)
+static/
+media/
