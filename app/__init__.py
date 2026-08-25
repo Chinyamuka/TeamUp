@@ -101,13 +101,13 @@ def create_app(config_name=None):
     from app.api.boards import boards_bp
     app.register_blueprint(boards_bp)
 
-    # Register boards blueprint
-    from app.api.boards import boards_bp
-    app.register_blueprint(boards_bp)
-
     # Register tasks blueprint
     from app.api.tasks import tasks_bp
     app.register_blueprint(tasks_bp)
+
+    # Register task assignments blueprint
+    from app.api.task_assignments import assignments_bp
+    app.register_blueprint(assignments_bp)
 
 
     # Error handlers

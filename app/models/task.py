@@ -2,13 +2,6 @@
 Task Model
 
 This module defines the Task model for the TeamUp application.
-A task is the atomic unit of work on a Kanban board.
-
-SRS References:
-- FR-3.1: Task CRUD with title, description, labels, due date
-- FR-3.2: Drag-and-drop reordering within and across columns
-- FR-3.3: Assigning a task to one or more project members
-- Section 6.2: Tasks table schema
 """
 
 from datetime import datetime
@@ -68,8 +61,10 @@ class Task(db.Model):
     def assign_user(self, user, assigned_by=None):
         """Assign a user to this task (FR-3.3)."""
         from app.models.task_assignment import TaskAssignment
-        if self.assignments.filter_by(user_id=user.id).first():
+        
+        if self.is_assigned_to_user(user):
             raise ValueError(f"User {user.email} is already assigned to this task")
+        
         assignment = TaskAssignment(
             task=self,
             user=user,
@@ -80,10 +75,49 @@ class Task(db.Model):
     
     def remove_user(self, user):
         """Remove a user's assignment to this task."""
-        assignment = self.assignments.filter_by(user_id=user.id).first()
+        assignment = self.assignments.filter_by(user_id=user.id, is_active=True).first()
         if not assignment:
             raise ValueError(f"User {user.email} is not assigned to this task")
-        db.session.delete(assignment)
+        
+        # Soft delete by deactivating
+        assignment.deactivate()
+    
+    def is_assigned_to_user(self, user):
+        """
+        Check if a user is assigned to this task.
+        
+        Args:
+            user: User object to check
+        
+        Returns:
+            bool: True if user is assigned, False otherwise
+        """
+        return self.assignments.filter_by(
+            user_id=user.id,
+            is_active=True
+        ).first() is not None
+    
+    def get_assignees(self):
+        """
+        Get all users assigned to this task.
+        
+        Returns:
+            list: List of User objects
+        """
+        from app.models import User
+        from app.models.task_assignment import TaskAssignment
+        
+        # Get all active assignments for this task
+        assignments = self.assignments.filter_by(is_active=True).all()
+        
+        # Get the user IDs from assignments
+        user_ids = [assignment.user_id for assignment in assignments]
+        
+        if not user_ids:
+            return []
+        
+        # Return the users
+        return User.query.filter(User.id.in_(user_ids)).all()
     
     def add_comment(self, author, body, parent_id=None):
         """Add a comment to this task (FR-3.4)."""
@@ -121,9 +155,9 @@ class Task(db.Model):
     def __repr__(self):
         return f'<Task(id={self.id}, title={self.title[:30]}...)>'
     
-    def to_dict(self):
+    def to_dict(self, include_assignees=False, include_comments=False):
         """Convert task to dictionary for API responses."""
-        return {
+        data = {
             'id': self.id,
             'column_id': self.column_id,
             'title': self.title,
@@ -140,3 +174,11 @@ class Task(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+        
+        if include_assignees:
+            data['assignees'] = [user.to_dict() for user in self.get_assignees()]
+        
+        if include_comments:
+            data['comments'] = [comment.to_dict() for comment in self.comments.all()]
+        
+        return data
