@@ -72,10 +72,10 @@ def create_app(config_name=None):
     # Redis
     redis_client.init_app(app)
 
-    # SocketIO
+    # SocketIO - FIXED: Allow all origins for development
     socketio.init_app(
         app,
-        cors_allowed_origins=app.config.get('SOCKETIO_CORS_ALLOWED_ORIGINS', ['*']),
+        cors_allowed_origins="*",  # Allow all origins for development
         message_queue=app.config.get('REDIS_URL'),
         async_mode='eventlet',
         ping_timeout=60,
@@ -109,6 +109,15 @@ def create_app(config_name=None):
     from app.api.task_assignments import assignments_bp
     app.register_blueprint(assignments_bp)
 
+    # Register comments blueprint
+    from app.api.comments import comments_bp
+    app.register_blueprint(comments_bp)
+
+    # ============================================================
+    # REGISTER WEBSOCKET EVENT HANDLERS
+    # ============================================================
+    from app.websocket.events import register_socket_handlers
+    register_socket_handlers(socketio)
 
     # Error handlers
     @app.errorhandler(404)
