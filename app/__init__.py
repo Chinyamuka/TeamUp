@@ -113,11 +113,17 @@ def create_app(config_name=None):
     from app.api.comments import comments_bp
     app.register_blueprint(comments_bp)
 
+    # Register notifications blueprint
+    from app.api.notifications import notifications_bp
+    app.register_blueprint(notifications_bp)
+
     # ============================================================
     # REGISTER WEBSOCKET EVENT HANDLERS
     # ============================================================
     from app.websocket.events import register_socket_handlers
     register_socket_handlers(socketio)
+
+
 
     # Error handlers
     @app.errorhandler(404)
