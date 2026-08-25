@@ -37,11 +37,37 @@ class User(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
-    projects = db.relationship('Project', backref='owner', lazy='dynamic')
-    memberships = db.relationship('ProjectMembership', back_populates='user', lazy='dynamic')
-    assigned_tasks = db.relationship('TaskAssignment', back_populates='user', lazy='dynamic')
-    notifications = db.relationship('Notification', back_populates='user', cascade='all, delete-orphan', lazy='dynamic', order_by='desc(Notification.created_at)')
-    comments = db.relationship('Comment', back_populates='author', cascade='all, delete-orphan', lazy='dynamic')
+    projects = db.relationship('Project', back_populates='owner', lazy='dynamic')
+    
+    # FIXED: Specify foreign_keys for memberships (user_id vs invited_by_id)
+    memberships = db.relationship(
+        'ProjectMembership',
+        back_populates='user',
+        lazy='dynamic',
+        foreign_keys='ProjectMembership.user_id'
+    )
+    
+    # FIXED: Specify foreign_keys for assigned_tasks (user_id vs assigned_by_id)
+    assigned_tasks = db.relationship(
+        'TaskAssignment',
+        back_populates='user',
+        lazy='dynamic',
+        foreign_keys='TaskAssignment.user_id'
+    )
+    
+    notifications = db.relationship(
+        'Notification',
+        back_populates='user',
+        cascade='all, delete-orphan',
+        lazy='dynamic',
+        order_by='desc(Notification.created_at)'
+    )
+    comments = db.relationship(
+        'Comment',
+        back_populates='author',
+        cascade='all, delete-orphan',
+        lazy='dynamic'
+    )
     
     @property
     def password(self):

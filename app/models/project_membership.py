@@ -28,8 +28,9 @@ class ProjectMembership(db.Model):
     joined_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     # Relationships (SRS Section 6.1)
+    # FIXED: Specify foreign keys explicitly
     project = db.relationship('Project', back_populates='memberships')
-    user = db.relationship('User', back_populates='memberships')
+    user = db.relationship('User', back_populates='memberships', foreign_keys=[user_id])
     invited_by = db.relationship('User', foreign_keys=[invited_by_id])
     
     # Unique constraint to prevent duplicate memberships
