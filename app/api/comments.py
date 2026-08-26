@@ -1,67 +1,37 @@
 """
-Comments API Routes
+Comments API Routes with Role-Based Access Control (RBAC)
 
-This module handles comment operations on tasks:
-- Add comments to tasks
-- Reply to comments (threaded discussions)
-- Edit comments
-- Delete comments
-- List comments on a task
+This module handles comment operations with permission checks.
 
 SRS References:
 - FR-3.4: "Support comments and an activity/audit log per task"
-- FR-6.2: "Create a notification when a user is @mentioned in a comment"
-- Section 6.2: comments table schema
-- Section 6.1: Task (1) --- (M) Comment
+- FR-1.3: Role-based access control (Owner, Admin, Member)
+- Section 9: Server-side authorization enforcement
 
-================================================================================
-HOW COMMENTS WORK:
-================================================================================
-
-Comments are threaded, meaning they can have replies:
-
-    Task: "Fix login bug"
-    │
-    ├── Comment 1: "Let's discuss this approach"
-    │   │
-    │   ├── Reply 1.1: "I agree, let's do it"
-    │   │
-    │   └── Reply 1.2: "Has anyone tested this?"
-    │
-    └── Comment 2: "I've updated the PR"
-
-Threading is achieved using parent_comment_id:
-- parent_comment_id = NULL → Top-level comment
-- parent_comment_id = 1 → Reply to comment 1
-
-================================================================================
-@MENTIONS (FR-6.2):
-================================================================================
-When a user types @username in a comment:
-1. We extract all @mentions using regex
-2. We check if the mentioned user is a project member
-3. If found and not the author, we create a notification
-4. The mentioned user receives an in-app alert
-
-Example:
-    Comment: "Hey @Don, can you review this?"
-    → Don receives a notification: "You were mentioned by John"
+Permissions:
+- Anyone with project access can view comments
+- Members+ can add comments
+- Authors can edit/delete their own comments
+- Admins+ can delete any comment in their project
 """
 
-import re  # Regular expressions for finding @mentions
+import re
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from app.extensions import db
 from app.models import User, Task, Comment
 from app.models.notification import Notification
+from app.utils.permissions import (
+    get_user_role,
+    has_role,
+    can_view_project,
+    can_edit_comment,
+    can_delete_comment,
+    get_user_role_display
+)
 
-# ============================================================
-# CREATE BLUEPRINT
-# ============================================================
-# url_prefix='/api' means routes are under /api
-# So /api/tasks/1/comments becomes: comments on task 1
-# And /api/comments/1 becomes: get comment 1
+# Create blueprint
 comments_bp = Blueprint('comments', __name__, url_prefix='/api')
 
 
@@ -76,22 +46,7 @@ def get_user_from_token():
 
 
 def get_task_or_404(task_id, user):
-    """
-    Get a task by ID and check if user has access.
-    
-    ========================================================================
-    SECURITY:
-    ========================================================================
-    - Users can only comment on tasks in projects they're members of
-    - This function checks both existence and access
-    
-    Args:
-        task_id: Task ID
-        user: Current user
-    
-    Returns:
-        Task object if found and accessible, None otherwise
-    """
+    """Get a task by ID and check if user has access."""
     task = Task.query.filter_by(id=task_id, is_archived=False).first()
     if not task:
         return None
@@ -100,10 +55,28 @@ def get_task_or_404(task_id, user):
     return task
 
 
+def get_comment_or_404(comment_id, user):
+    """Get a comment by ID and check if user has access."""
+    comment = Comment.query.get(comment_id)
+    if not comment:
+        return None
+    
+    # Check if user has access to the task's project
+    if not comment.task.column.board.project.is_member(user):
+        return None
+    
+    return comment
+
+
+def extract_mentions(text):
+    """Extract @mentioned usernames from text."""
+    pattern = r'@(\w+)'
+    return re.findall(pattern, text)
+
+
 # ============================================================
-# ENDPOINT 1: ADD COMMENT TO TASK
+# COMMENT ENDPOINTS WITH RBAC
 # ============================================================
-# POST /api/tasks/<task_id>/comments
 
 @comments_bp.route('/tasks/<int:task_id>/comments', methods=['POST'])
 @jwt_required()
@@ -111,35 +84,9 @@ def add_comment(task_id):
     """
     Add a comment to a task.
     
-    SRS References:
+    SRS Reference:
         FR-3.4: "Comments on tasks"
         FR-6.2: "Create a notification when a user is @mentioned in a comment"
-    
-    ========================================================================
-    THE FLOW:
-    ========================================================================
-    1. Get the current user
-    2. Get the task and check access
-    3. Check if user is a project member
-    4. Get request data (body, parent_comment_id)
-    5. If replying, check parent comment exists
-    6. Create the comment
-    7. Check for @mentions in the comment body (FR-6.2)
-    8. Create notifications for each mentioned user
-    9. Save everything
-    10. Return the created comment
-    
-    ========================================================================
-    @MENTION DETECTION (FR-6.2):
-    ========================================================================
-    Pattern: @username
-    Example: "Hey @Don, can you help?"
-    → Extracts ['Don']
-    
-    For each mention:
-    1. Check if the user exists in the project
-    2. If found and not the author, create notification
-    3. Notification includes the comment context
     
     Request Body:
         {
@@ -149,9 +96,7 @@ def add_comment(task_id):
     
     Returns:
         201: Comment added successfully
-        400: Invalid request
-        401: User not authenticated
-        403: Access denied
+        403: User doesn't have permission
         404: Task not found
     """
     # Step 1: Get the current user
@@ -164,9 +109,13 @@ def add_comment(task_id):
     if not task:
         return jsonify({'error': 'Task not found or access denied'}), 404
     
-    # Step 3: Check if user is a member of the project
-    if not task.column.board.project.is_member(current_user):
-        return jsonify({'error': 'You do not have permission to comment'}), 403
+    # Step 3: Check if user can comment (member+)
+    if not has_role(current_user, task.column.board.project, 'member'):
+        return jsonify({
+            'error': 'You do not have permission to comment on this task',
+            'your_role': get_user_role(current_user, task.column.board.project),
+            'required_role': 'member'
+        }), 403
     
     # Step 4: Get request data
     data = request.get_json()
@@ -196,60 +145,37 @@ def add_comment(task_id):
     )
     db.session.add(comment)
     
-    # ============================================================
-    # STEP 7: Check for @mentions (FR-6.2)
-    # ============================================================
-    # Find all @mentions in the comment body
-    # Pattern: @ followed by word characters (letters, numbers, underscore)
-    # Example: @Don, @Sarah, @John_Doe
-    mention_pattern = r'@(\w+)'
-    mentions = re.findall(mention_pattern, body)
-    
-    # Get all project members (to validate mentioned users)
+    # Step 7: Check for @mentions and create notifications (FR-6.2)
+    mentions = extract_mentions(body)
     project = task.column.board.project
     members = project.get_members()
     
-    # ============================================================
-    # STEP 8: Create notifications for each mention
-    # ============================================================
     for username in mentions:
-        # Find the user by full_name (simple matching)
-        # Note: In production, you'd want a dedicated username field
         mentioned_user = None
         for member in members:
             if member.full_name.lower() == username.lower():
                 mentioned_user = member
                 break
         
-        # If found and not the author, create notification
         if mentioned_user and mentioned_user.id != current_user.id:
-            # Notification.create_mention() creates a notification
-            # with type "task_mention"
             notification = Notification.create_mention(
-                user=mentioned_user,      # Who receives the notification
-                comment=comment,          # The comment they were mentioned in
-                mentioned_by=current_user # Who mentioned them
+                user=mentioned_user,
+                comment=comment,
+                mentioned_by=current_user
             )
             db.session.add(notification)
     
-    # ============================================================
-    # STEP 9: Save everything to the database
-    # ============================================================
     db.session.commit()
     
-    # ============================================================
-    # STEP 10: Return the created comment
-    # ============================================================
+    # Step 8: Return the created comment
+    comment_dict = comment.to_dict(include_replies=True)
+    comment_dict['user_role'] = get_user_role(current_user, project)
+    
     return jsonify({
         'message': 'Comment added successfully',
-        'comment': comment.to_dict(include_replies=True)
+        'comment': comment_dict
     }), 201
 
-
-# ============================================================
-# ENDPOINT 2: LIST COMMENTS ON A TASK
-# ============================================================
-# GET /api/tasks/<task_id>/comments
 
 @comments_bp.route('/tasks/<int:task_id>/comments', methods=['GET'])
 @jwt_required()
@@ -257,16 +183,12 @@ def list_comments(task_id):
     """
     List all comments on a task (top-level only).
     
-    ========================================================================
-    WHY TOP-LEVEL ONLY:
-    ========================================================================
-    - We return only top-level comments (parent_comment_id = NULL)
-    - Each comment includes its replies via to_dict(include_replies=True)
-    - This creates a nested structure: comments with replies inside
+    SRS Reference:
+        FR-3.4: "Comments on tasks"
     
     Returns:
         200: List of comments
-        401: User not authenticated
+        403: User doesn't have access
         404: Task not found
     """
     # Step 1: Get the current user
@@ -279,23 +201,28 @@ def list_comments(task_id):
     if not task:
         return jsonify({'error': 'Task not found or access denied'}), 404
     
-    # Step 3: Get all top-level comments (no parent)
+    # Step 3: Check if user can view this task
+    if not has_role(current_user, task.column.board.project, 'viewer'):
+        return jsonify({'error': 'You do not have access to this task'}), 403
+    
+    # Step 4: Get all top-level comments (no parent)
     comments = Comment.query.filter_by(
         task_id=task.id,
         parent_comment_id=None
     ).order_by(Comment.created_at).all()
     
-    # Step 4: Return comments with replies
+    # Step 5: Return comments with replies
+    comments_data = []
+    for comment in comments:
+        comment_dict = comment.to_dict(include_replies=True)
+        comment_dict['user_role'] = get_user_role(current_user, task.column.board.project)
+        comments_data.append(comment_dict)
+    
     return jsonify({
-        'comments': [comment.to_dict(include_replies=True) for comment in comments],
-        'count': len(comments)
+        'comments': comments_data,
+        'count': len(comments_data)
     }), 200
 
-
-# ============================================================
-# ENDPOINT 3: GET A SPECIFIC COMMENT
-# ============================================================
-# GET /api/comments/<comment_id>
 
 @comments_bp.route('/comments/<int:comment_id>', methods=['GET'])
 @jwt_required()
@@ -305,7 +232,7 @@ def get_comment(comment_id):
     
     Returns:
         200: Comment details
-        401: User not authenticated
+        403: User doesn't have access
         404: Comment not found
     """
     # Step 1: Get the current user
@@ -314,24 +241,21 @@ def get_comment(comment_id):
         return jsonify({'error': 'User not found'}), 401
     
     # Step 2: Get the comment
-    comment = Comment.query.get(comment_id)
+    comment = get_comment_or_404(comment_id, current_user)
     if not comment:
-        return jsonify({'error': 'Comment not found'}), 404
+        return jsonify({'error': 'Comment not found or access denied'}), 404
     
-    # Step 3: Check access
-    if not comment.task.column.board.project.is_member(current_user):
-        return jsonify({'error': 'Access denied'}), 403
+    # Step 3: Check if user can view this comment
+    if not has_role(current_user, comment.task.column.board.project, 'viewer'):
+        return jsonify({'error': 'You do not have access to this comment'}), 403
     
-    # Step 4: Return comment with replies
+    comment_dict = comment.to_dict(include_replies=True)
+    comment_dict['user_role'] = get_user_role(current_user, comment.task.column.board.project)
+    
     return jsonify({
-        'comment': comment.to_dict(include_replies=True)
+        'comment': comment_dict
     }), 200
 
-
-# ============================================================
-# ENDPOINT 4: EDIT A COMMENT
-# ============================================================
-# PUT /api/comments/<comment_id>
 
 @comments_bp.route('/comments/<int:comment_id>', methods=['PUT'])
 @jwt_required()
@@ -339,42 +263,38 @@ def edit_comment(comment_id):
     """
     Edit a comment.
     
-    ========================================================================
-    EDIT TRACKING:
-    ========================================================================
-    When a comment is edited:
-    - is_edited = True
-    - edited_at = current timestamp
-    - body = new body
-    - updated_at = current timestamp
+    SRS Reference:
+        FR-3.4: Comments can be edited
     
-    This provides an audit trail of changes.
+    Request Body:
+        {
+            "body": "Updated comment text"
+        }
     
     Returns:
         200: Comment updated
-        401: User not authenticated
-        403: Not the author
+        403: User doesn't have permission (not author or admin)
         404: Comment not found
     """
     # Step 1: Get the current user
     current_user = get_user_from_token()
-    if not current_user:
+    if not current_user):
         return jsonify({'error': 'User not found'}), 401
     
     # Step 2: Get the comment
-    comment = Comment.query.get(comment_id)
+    comment = get_comment_or_404(comment_id, current_user)
     if not comment:
-        return jsonify({'error': 'Comment not found'}), 404
+        return jsonify({'error': 'Comment not found or access denied'}), 404
     
-    # Step 3: Check access
-    if not comment.task.column.board.project.is_member(current_user):
-        return jsonify({'error': 'Access denied'}), 403
+    # Step 3: Check if user can edit this comment
+    if not can_edit_comment(current_user, comment):
+        return jsonify({
+            'error': 'You do not have permission to edit this comment',
+            'your_role': get_user_role(current_user, comment.task.column.board.project),
+            'required_role': 'author or admin'
+        }), 403
     
-    # Step 4: Check if user is the author
-    if comment.author_id != current_user.id:
-        return jsonify({'error': 'You can only edit your own comments'}), 403
-    
-    # Step 5: Get request data
+    # Step 4: Get request data
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
@@ -383,21 +303,18 @@ def edit_comment(comment_id):
     if not body:
         return jsonify({'error': 'Comment body is required'}), 400
     
-    # Step 6: Update the comment (sets is_edited=True, edited_at=now)
+    # Step 5: Update the comment
     comment.edit(body)
     db.session.commit()
     
-    # Step 7: Return updated comment
+    comment_dict = comment.to_dict(include_replies=True)
+    comment_dict['user_role'] = get_user_role(current_user, comment.task.column.board.project)
+    
     return jsonify({
         'message': 'Comment updated successfully',
-        'comment': comment.to_dict(include_replies=True)
+        'comment': comment_dict
     }), 200
 
-
-# ============================================================
-# ENDPOINT 5: DELETE A COMMENT
-# ============================================================
-# DELETE /api/comments/<comment_id>
 
 @comments_bp.route('/comments/<int:comment_id>', methods=['DELETE'])
 @jwt_required()
@@ -405,23 +322,16 @@ def delete_comment(comment_id):
     """
     Delete a comment.
     
-    ========================================================================
-    CASCADE DELETE:
-    ========================================================================
-    When a comment is deleted, all its replies are also deleted.
-    This is configured in the model with cascade='all, delete-orphan'.
+    SRS Reference:
+        FR-3.4: Comments can be deleted
     
-    ========================================================================
-    PERMISSIONS:
-    ========================================================================
-    - Author can delete their own comments
-    - Project admins can delete any comment in the project
-    - This prevents spam and inappropriate content
+    Permission Rules:
+        - Author can delete their own comments
+        - Admins+ can delete any comment in their project
     
     Returns:
         200: Comment deleted
-        401: User not authenticated
-        403: Not the author or admin
+        403: User doesn't have permission
         404: Comment not found
     """
     # Step 1: Get the current user
@@ -430,27 +340,56 @@ def delete_comment(comment_id):
         return jsonify({'error': 'User not found'}), 401
     
     # Step 2: Get the comment
-    comment = Comment.query.get(comment_id)
+    comment = get_comment_or_404(comment_id, current_user)
     if not comment:
-        return jsonify({'error': 'Comment not found'}), 404
+        return jsonify({'error': 'Comment not found or access denied'}), 404
     
-    # Step 3: Check access
-    if not comment.task.column.board.project.is_member(current_user):
-        return jsonify({'error': 'Access denied'}), 403
+    # Step 3: Check if user can delete this comment
+    if not can_delete_comment(current_user, comment):
+        return jsonify({
+            'error': 'You do not have permission to delete this comment',
+            'your_role': get_user_role(current_user, comment.task.column.board.project),
+            'required_role': 'author or admin'
+        }), 403
     
-    # Step 4: Check if user is the author or a project admin
-    project = comment.task.column.board.project
-    
-    if comment.author_id != current_user.id:
-        # Check if user is a project admin
-        if not current_user.has_permission(project, 'admin'):
-            return jsonify({'error': 'You can only delete your own comments'}), 403
-    
-    # Step 5: Delete the comment (and its replies via cascade)
+    # Step 4: Delete the comment (and its replies via cascade)
     db.session.delete(comment)
     db.session.commit()
     
-    # Step 6: Return success
     return jsonify({
         'message': 'Comment deleted successfully'
+    }), 200
+
+
+@comments_bp.route('/comments/<int:comment_id>/permissions', methods=['GET'])
+@jwt_required()
+def get_comment_permissions(comment_id):
+    """
+    Get the current user's permissions for a comment.
+    
+    Returns:
+        200: Permission summary
+        404: Comment not found
+    """
+    # Step 1: Get the current user
+    current_user = get_user_from_token()
+    if not current_user:
+        return jsonify({'error': 'User not found'}), 401
+    
+    # Step 2: Get the comment
+    comment = get_comment_or_404(comment_id, current_user)
+    if not comment:
+        return jsonify({'error': 'Comment not found or access denied'}), 404
+    
+    user_role = get_user_role(current_user, comment.task.column.board.project)
+    
+    return jsonify({
+        'comment_id': comment_id,
+        'user_role': user_role,
+        'is_author': comment.author_id == current_user.id,
+        'permissions': {
+            'can_view': has_role(current_user, comment.task.column.board.project, 'viewer'),
+            'can_edit': can_edit_comment(current_user, comment),
+            'can_delete': can_delete_comment(current_user, comment)
+        }
     }), 200
