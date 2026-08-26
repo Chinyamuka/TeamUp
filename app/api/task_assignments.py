@@ -1,43 +1,13 @@
 """
-Task Assignment API Routes
+Task Assignment API Routes with Role-Based Access Control (RBAC)
 
-This module handles task assignment operations:
-- Assign users to tasks
-- Remove users from tasks
-- List assigned users
-- Check if user is assigned
+This module handles task assignment operations with permission checks.
 
 SRS References:
 - FR-3.3: "Assigning a task to one or more project members"
 - FR-6.1: "Create an in-app notification when a user is assigned a task"
-- Section 6.2: task_assignments table schema
-
-================================================================================
-HOW TASK ASSIGNMENT WORKS:
-================================================================================
-
-When a user is assigned to a task, two things happen:
-1. A TaskAssignment record is created in the database
-2. A Notification is created to alert the user (FR-6.1)
-
-This is a many-to-many relationship:
-- A task can have multiple users assigned
-- A user can be assigned to multiple tasks
-
-The TaskAssignment table tracks:
-- Who was assigned (user_id)
-- What task they were assigned to (task_id)
-- Who made the assignment (assigned_by_id)
-- When it was assigned (assigned_at)
-- Whether it's still active (is_active)
-
-================================================================================
-WHY WE USE SOFT DELETE (is_active):
-================================================================================
-- We keep history of all assignments
-- We can reactivate assignments if needed
-- We can audit who was assigned to what
-- We don't lose data when unassigning
+- FR-1.3: Role-based access control (Owner, Admin, Member)
+- Section 9: Server-side authorization enforcement
 """
 
 from flask import Blueprint, request, jsonify
@@ -46,13 +16,13 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models import User, Task, TaskAssignment
 from app.models.notification import Notification
+from app.utils.permissions import (
+    get_user_role,
+    has_role,
+    get_user_role_display
+)
 
-# ============================================================
-# CREATE BLUEPRINT
-# ============================================================
-# A blueprint groups related routes together.
-# url_prefix='/api/tasks' means all routes start with /api/tasks
-# So /api/tasks/1/assign becomes: assign user to task 1
+# Create blueprint
 assignments_bp = Blueprint('assignments', __name__, url_prefix='/api/tasks')
 
 
@@ -61,84 +31,45 @@ assignments_bp = Blueprint('assignments', __name__, url_prefix='/api/tasks')
 # ============================================================
 
 def get_user_from_token():
-    """
-    Get the current user from JWT token.
-    
-    ========================================================================
-    WHY WE NEED THIS:
-    ========================================================================
-    - WebSocket connections use @jwt_required decorator
-    - This function extracts the user ID from the token
-    - We then query the database for the full User object
-    
-    ========================================================================
-    SECURITY:
-    ========================================================================
-    - Always validate the token
-    - Always check the user exists in the database
-    - Never trust client-provided user IDs
-    
-    Returns:
-        User object if found, None if not found
-    """
+    """Get the current user from JWT token."""
     user_id = get_jwt_identity()
     return User.query.get(int(user_id))
 
 
 def get_task_or_404(task_id, user):
-    """
-    Get a task by ID and check if user has access.
-    
-    ========================================================================
-    WHY WE NEED THIS:
-    ========================================================================
-    - Users should only see tasks in projects they are members of
-    - We need to check permissions before allowing access
-    - Security check: user must be a project member
-    
-    Args:
-        task_id: The ID of the task to fetch
-        user: The current user (from get_user_from_token)
-    
-    Returns:
-        Task object if found AND user has access, None otherwise
-    
-    ========================================================================
-    HOW IT WORKS:
-    ========================================================================
-    1. Query the task by ID (only non-archived tasks)
-    2. If task doesn't exist, return None
-    3. Check if the task's column's board's project is accessible to the user
-    4. If not a member, return None
-    5. Otherwise, return the task
-    
-    SRS Reference:
-        FR-2.4: "Role-based access control at the project level"
-    """
-    # Query for the task
-    # filter_by(is_archived=False) - only active tasks
+    """Get a task by ID and check if user has access."""
     task = Task.query.filter_by(id=task_id, is_archived=False).first()
-    
-    # If task doesn't exist, return None
     if not task:
         return None
-    
-    # Check if user is a member of the project
-    # task.column.board.project gets the project
-    # is_member() checks if user is in the project's members
     if not task.column.board.project.is_member(user):
         return None
-    
     return task
 
 
+def can_assign_task(task, user):
+    """
+    Check if user can assign users to a task.
+    
+    Allowed: member+ in the project
+    """
+    return has_role(user, task.column.board.project, 'member')
+
+
+def can_unassign_task(task, user):
+    """
+    Check if user can unassign users from a task.
+    
+    Allowed: member+ in the project
+    """
+    return has_role(user, task.column.board.project, 'member')
+
+
 # ============================================================
-# ENDPOINT 1: ASSIGN USER TO TASK
+# TASK ASSIGNMENT ENDPOINTS WITH RBAC
 # ============================================================
-# POST /api/tasks/<task_id>/assign
 
 @assignments_bp.route('/<int:task_id>/assign', methods=['POST'])
-@jwt_required()  # This endpoint requires authentication
+@jwt_required()
 def assign_user(task_id):
     """
     Assign a user to a task.
@@ -147,74 +78,37 @@ def assign_user(task_id):
         FR-3.3: "Assigning a task to one or more project members"
         FR-6.1: "Create an in-app notification when a user is assigned a task"
     
-    ========================================================================
-    THE FLOW:
-    ========================================================================
-    1. Get the current user from the JWT token (the assignor)
-    2. Get the task and check access
-    3. Check if current user has permission to assign (must be project member)
-    4. Get the user to assign from the request body
-    5. Validate the user exists and is a project member
-    6. Check if user is already assigned (prevent duplicates)
-    7. Create the assignment
-    8. Create a notification for the assigned user (FR-6.1)
-    9. Save everything to the database
-    10. Return the assignment details
-    
-    ========================================================================
-    NOTIFICATION CREATION (FR-6.1):
-    ========================================================================
-    When a user is assigned to a task, we use Notification.create_task_assigned()
-    This creates an in-app notification with:
-    - Type: "task_assigned"
-    - Title: "New task assigned: [task title]"
-    - Message: "[assignor] assigned you to task '[task title]'"
-    - Payload: {task_id, task_title, assigned_by_id, assigned_by_name}
-    - Click action: Link to the task
-    - Icon: "📋"
-    
     Request Body:
         {
-            "user_id": 2  // ID of user to assign
+            "user_id": 2
         }
     
     Returns:
         201: User assigned successfully
-        400: User already assigned
-        401: User not authenticated
-        403: Access denied
+        403: User doesn't have permission
         404: Task or user not found
+        409: User already assigned
     """
-    # ============================================================
-    # STEP 1: Get the current user (the person making the assignment)
-    # ============================================================
+    # Step 1: Get the current user
     current_user = get_user_from_token()
-    
-    # If user doesn't exist, return 401 Unauthorized
     if not current_user:
         return jsonify({'error': 'User not found'}), 401
     
-    # ============================================================
-    # STEP 2: Get the task and check access
-    # ============================================================
+    # Step 2: Get the task
     task = get_task_or_404(task_id, current_user)
-    
-    # If task doesn't exist or user can't access it, return 404
     if not task:
         return jsonify({'error': 'Task not found or access denied'}), 404
     
-    # ============================================================
-    # STEP 3: Check if current user has permission to assign
-    # ============================================================
-    # Any project member can assign tasks
-    if not task.column.board.project.is_member(current_user):
-        return jsonify({'error': 'You do not have permission to assign tasks'}), 403
+    # Step 3: Check if user can assign tasks (member+)
+    if not can_assign_task(task, current_user):
+        return jsonify({
+            'error': 'You do not have permission to assign users to this task',
+            'your_role': get_user_role(current_user, task.column.board.project),
+            'required_role': 'member'
+        }), 403
     
-    # ============================================================
-    # STEP 4: Get the request data
-    # ============================================================
+    # Step 4: Get request data
     data = request.get_json()
-    
     if not data:
         return jsonify({'error': 'No data provided'}), 400
     
@@ -222,67 +116,40 @@ def assign_user(task_id):
     if not user_id:
         return jsonify({'error': 'user_id is required'}), 400
     
-    # ============================================================
-    # STEP 5: Find the user to assign
-    # ============================================================
+    # Step 5: Find the user to assign
     user_to_assign = User.query.get(user_id)
     if not user_to_assign:
         return jsonify({'error': 'User not found'}), 404
     
-    # ============================================================
-    # STEP 6: Check if the user is a member of the project
-    # ============================================================
-    # Security check: Can't assign someone who isn't in the project
+    # Step 6: Check if user is a member of the project
     if not task.column.board.project.is_member(user_to_assign):
         return jsonify({'error': 'User is not a member of this project'}), 400
     
-    # ============================================================
-    # STEP 7: Check if user is already assigned
-    # ============================================================
-    # Prevent duplicate assignments
+    # Step 7: Check if user is already assigned
     if task.is_assigned_to_user(user_to_assign):
         return jsonify({'error': 'User is already assigned to this task'}), 400
     
-    # ============================================================
-    # STEP 8: Assign the user
-    # ============================================================
-    # task.assign_user() creates the TaskAssignment record
-    # It also sets is_active=True by default
+    # Step 8: Assign the user
     assignment = task.assign_user(
         user=user_to_assign,
         assigned_by=current_user
     )
     
-    # ============================================================
-    # STEP 9: Create notification (FR-6.1)
-    # ============================================================
-    # This is where FR-6.1 is implemented:
-    # "Create an in-app notification when a user is assigned a task"
+    # Step 9: Create notification (FR-6.1)
     notification = Notification.create_task_assigned(
-        user=user_to_assign,  # Who receives the notification
-        task=task,            # What task they were assigned to
-        assigned_by=current_user  # Who assigned them
+        user=user_to_assign,
+        task=task,
+        assigned_by=current_user
     )
     db.session.add(notification)
     
-    # ============================================================
-    # STEP 10: Save everything to the database
-    # ============================================================
     db.session.commit()
     
-    # ============================================================
-    # STEP 11: Return success
-    # ============================================================
     return jsonify({
         'message': 'User assigned successfully',
         'assignment': assignment.to_dict()
     }), 201
 
-
-# ============================================================
-# ENDPOINT 2: REMOVE USER FROM TASK
-# ============================================================
-# DELETE /api/tasks/<task_id>/assign/<user_id>
 
 @assignments_bp.route('/<int:task_id>/assign/<int:user_id>', methods=['DELETE'])
 @jwt_required()
@@ -290,22 +157,12 @@ def remove_assignment(task_id, user_id):
     """
     Remove a user's assignment from a task.
     
-    ========================================================================
-    HOW IT WORKS:
-    ========================================================================
-    1. Get the current user (the person removing the assignment)
-    2. Get the task and check access
-    3. Check if current user has permission
-    4. Find the user to unassign
-    5. Check if user is actually assigned
-    6. Remove the assignment (soft delete via is_active=False)
-    7. Save to database
-    8. Return success
+    SRS Reference:
+        FR-3.3: Task assignment management
     
     Returns:
         200: User unassigned successfully
-        401: User not authenticated
-        403: Access denied
+        403: User doesn't have permission
         404: Task or assignment not found
     """
     # Step 1: Get the current user
@@ -318,9 +175,13 @@ def remove_assignment(task_id, user_id):
     if not task:
         return jsonify({'error': 'Task not found or access denied'}), 404
     
-    # Step 3: Check permission
-    if not task.column.board.project.is_member(current_user):
-        return jsonify({'error': 'You do not have permission'}), 403
+    # Step 3: Check if user can unassign (member+)
+    if not can_unassign_task(task, current_user):
+        return jsonify({
+            'error': 'You do not have permission to remove assignments from this task',
+            'your_role': get_user_role(current_user, task.column.board.project),
+            'required_role': 'member'
+        }), 403
     
     # Step 4: Find the user to unassign
     user_to_remove = User.query.get(user_id)
@@ -331,20 +192,14 @@ def remove_assignment(task_id, user_id):
     if not task.is_assigned_to_user(user_to_remove):
         return jsonify({'error': 'User is not assigned to this task'}), 404
     
-    # Step 6: Remove assignment (soft delete)
+    # Step 6: Remove assignment
     task.remove_user(user_to_remove)
     db.session.commit()
     
-    # Step 7: Return success
     return jsonify({
         'message': 'User unassigned successfully'
     }), 200
 
-
-# ============================================================
-# ENDPOINT 3: LIST ASSIGNED USERS
-# ============================================================
-# GET /api/tasks/<task_id>/assign
 
 @assignments_bp.route('/<int:task_id>/assign', methods=['GET'])
 @jwt_required()
@@ -352,20 +207,12 @@ def list_assignments(task_id):
     """
     List all users assigned to a task.
     
-    ========================================================================
-    HOW IT WORKS:
-    ========================================================================
-    1. Get the current user
-    2. Get the task and check access
-    3. Get all active assignees
-    4. Return the list
-    
     SRS Reference:
         FR-3.3: Task assignment listing
     
     Returns:
         200: List of assigned users
-        401: User not authenticated
+        403: User doesn't have access
         404: Task not found
     """
     # Step 1: Get the current user
@@ -378,20 +225,24 @@ def list_assignments(task_id):
     if not task:
         return jsonify({'error': 'Task not found or access denied'}), 404
     
-    # Step 3: Get all assignees
+    # Step 3: Check if user can view this task
+    if not has_role(current_user, task.column.board.project, 'viewer'):
+        return jsonify({'error': 'You do not have access to this task'}), 403
+    
+    # Step 4: Get all assignees
     assignees = task.get_assignees()
     
-    # Step 4: Return list
+    assignees_data = []
+    for assignee in assignees:
+        assignee_dict = assignee.to_dict()
+        assignee_dict['role'] = get_user_role(assignee, task.column.board.project)
+        assignees_data.append(assignee_dict)
+    
     return jsonify({
-        'assignees': [user.to_dict() for user in assignees],
-        'count': len(assignees)
+        'assignees': assignees_data,
+        'count': len(assignees_data)
     }), 200
 
-
-# ============================================================
-# ENDPOINT 4: CHECK IF USER IS ASSIGNED
-# ============================================================
-# GET /api/tasks/<task_id>/assigned/<user_id>
 
 @assignments_bp.route('/<int:task_id>/assigned/<int:user_id>', methods=['GET'])
 @jwt_required()
@@ -399,16 +250,9 @@ def check_assignment(task_id, user_id):
     """
     Check if a user is assigned to a task.
     
-    ========================================================================
-    WHY WE NEED THIS:
-    ========================================================================
-    - Frontend needs to show if a user is already assigned
-    - Avoids duplicate assignments
-    - Shows assignment status in UI
-    
     Returns:
         200: Assignment status
-        401: User not authenticated
+        403: User doesn't have access
         404: Task not found
     """
     # Step 1: Get the current user
@@ -421,17 +265,54 @@ def check_assignment(task_id, user_id):
     if not task:
         return jsonify({'error': 'Task not found or access denied'}), 404
     
-    # Step 3: Find the user
+    # Step 3: Check if user can view this task
+    if not has_role(current_user, task.column.board.project, 'viewer'):
+        return jsonify({'error': 'You do not have access to this task'}), 403
+    
+    # Step 4: Find the user
     user_to_check = User.query.get(user_id)
     if not user_to_check:
         return jsonify({'error': 'User not found'}), 404
     
-    # Step 4: Check assignment
+    # Step 5: Check assignment
     is_assigned = task.is_assigned_to_user(user_to_check)
     
-    # Step 5: Return status
     return jsonify({
         'task_id': task_id,
         'user_id': user_id,
-        'is_assigned': is_assigned
+        'is_assigned': is_assigned,
+        'user_role': get_user_role(user_to_check, task.column.board.project)
+    }), 200
+
+
+@assignments_bp.route('/<int:task_id>/assign/permissions', methods=['GET'])
+@jwt_required()
+def get_assignment_permissions(task_id):
+    """
+    Get the current user's permissions for task assignments.
+    
+    Returns:
+        200: Permission summary
+        404: Task not found
+    """
+    # Step 1: Get the current user
+    current_user = get_user_from_token()
+    if not current_user:
+        return jsonify({'error': 'User not found'}), 401
+    
+    # Step 2: Get the task
+    task = get_task_or_404(task_id, current_user)
+    if not task:
+        return jsonify({'error': 'Task not found or access denied'}), 404
+    
+    user_role = get_user_role(current_user, task.column.board.project)
+    
+    return jsonify({
+        'task_id': task_id,
+        'user_role': user_role,
+        'permissions': {
+            'can_assign': can_assign_task(task, current_user),
+            'can_unassign': can_unassign_task(task, current_user),
+            'can_view_assignments': has_role(current_user, task.column.board.project, 'viewer')
+        }
     }), 200
