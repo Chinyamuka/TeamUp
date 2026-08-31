@@ -1,16 +1,34 @@
 /**
- * Task Detail Modal Component
- * 
- * Displays full task information with comments, activities, and actions.
+ * Task Detail Modal Component with Working Comments
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { tasks as tasksApi, comments as commentsApi } from '../../api/client';
 
-export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
+export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user, userRole }) => {
   const [commentText, setCommentText] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(task.title);
   const [editDescription, setEditDescription] = useState(task.description || '');
+  const [comments, setComments] = useState(task.comments || []);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(null);
+  const [isCopied, setIsCopied] = useState(false);
+
+  // Load comments when task changes
+  useEffect(() => {
+    loadComments();
+  }, [task.id]);
+
+  const loadComments = async () => {
+    try {
+      const data = await commentsApi.list(task.id);
+      setComments(data.comments || []);
+    } catch (err) {
+      console.error('Error loading comments:', err);
+    }
+  };
 
   const priorityColors = {
     high: 'bg-amber-urgency',
@@ -18,17 +36,29 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
     low: 'bg-mint-success',
   };
 
-  const handleAddComment = () => {
+  const handleAddComment = async (e) => {
+    e.preventDefault();
     if (!commentText.trim()) return;
-    const newComment = {
-      id: `comment_${Date.now()}`,
-      author: user,
-      body: commentText.trim(),
-      created_at: new Date().toISOString(),
-    };
-    const updatedComments = [...(task.comments || []), newComment];
-    onUpdate(task.id, { comments: updatedComments });
-    setCommentText('');
+
+    setSubmitting(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const data = await commentsApi.add(task.id, commentText.trim());
+      if (data.comment) {
+        setComments([data.comment, ...comments]);
+        setCommentText('');
+        setSuccess('Comment added successfully!');
+        setTimeout(() => setSuccess(null), 3000);
+        onUpdate(task.id, { comments: [data.comment, ...comments] });
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to add comment');
+      console.error('Error adding comment:', err);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleSaveEdit = () => {
@@ -40,20 +70,31 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
   };
 
   const handleStatusChange = (newStatus) => {
-    onUpdate(task.id, { status: newStatus });
+    onUpdate(task.id, { columnId: newStatus });
   };
+
+  const handleCopyLink = () => {
+    navigator.clipboard?.writeText(window.location.href);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  const canEdit = userRole === 'owner' || userRole === 'admin' || userRole === 'member';
 
   return (
     <div className="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
       <div className="w-full max-w-4xl max-h-[90vh] bg-white rounded-xl border border-border shadow-2xl flex flex-col overflow-hidden">
-        {/* Header */}
+        {/* Priority Strip */}
         <div className={`h-1 w-full ${priorityColors[task.priority] || 'bg-logic-blue'}`} />
 
+        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div className="flex items-center gap-2 text-sm text-text-secondary">
-            <span className="font-mono font-bold text-text-primary">{task.code || 'TASK'}</span>
-            <span>•</span>
-            <span>{task.boardName || 'No Board'}</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-mono font-bold text-text-muted bg-surface-hover px-2 py-0.5 rounded">
+              {task.code || 'TASK'}
+            </span>
+            <span className="text-xs text-text-secondary">•</span>
+            <span className="text-xs text-text-secondary">{task.boardName || 'No Board'}</span>
           </div>
           <button
             onClick={onClose}
@@ -116,56 +157,94 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
                   </div>
                 )}
 
-                <button
-                  onClick={() => setIsEditing(true)}
-                  className="text-sm text-logic-blue hover:underline"
-                >
-                  Edit Task
-                </button>
+                {canEdit && (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="text-sm text-logic-blue hover:underline"
+                  >
+                    Edit Task
+                  </button>
+                )}
 
                 {/* Comments */}
                 <div className="mt-6">
                   <h3 className="font-semibold text-text-primary mb-3">Comments</h3>
-                  <div className="space-y-3 max-h-[200px] overflow-y-auto">
-                    {(task.comments || []).map((comment) => (
-                      <div key={comment.id} className="flex gap-3">
-                        <img
-                          src={comment.author?.avatar || `https://ui-avatars.com/api/?name=${comment.author?.name || 'User'}&background=3B4AF5&color=fff`}
-                          alt={comment.author?.name}
-                          className="w-8 h-8 rounded-full object-cover"
-                        />
-                        <div className="flex-1 bg-surface-hover rounded-lg p-3">
-                          <div className="flex justify-between items-center mb-1">
-                            <span className="font-medium text-sm text-text-primary">
-                              {comment.author?.name || 'Unknown'}
-                            </span>
-                            <span className="text-xs text-text-muted">
-                              {comment.created_at ? new Date(comment.created_at).toLocaleDateString() : ''}
-                            </span>
-                          </div>
-                          <p className="text-sm text-text-secondary">{comment.body}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  
+                  {/* Success/Error Messages */}
+                  {success && (
+                    <div className="bg-mint-success/10 border border-mint-success text-mint-success px-4 py-2 rounded-lg mb-3 text-sm">
+                      {success}
+                    </div>
+                  )}
+                  {error && (
+                    <div className="bg-error-light border border-error text-on-error-container px-4 py-2 rounded-lg mb-3 text-sm">
+                      {error}
+                    </div>
+                  )}
 
                   {/* Add Comment */}
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      type="text"
-                      value={commentText}
-                      onChange={(e) => setCommentText(e.target.value)}
-                      placeholder="Add a comment..."
-                      className="flex-1 bg-surface-hover border border-border rounded-lg px-3 py-2 text-sm focus:border-logic-blue focus:ring-2 focus:ring-logic-blue/20 outline-none"
-                      onKeyDown={(e) => e.key === 'Enter' && handleAddComment()}
+                  <form onSubmit={handleAddComment} className="flex gap-3 items-start mb-4">
+                    <img
+                      src={user?.avatar || `https://ui-avatars.com/api/?name=${user?.full_name || 'User'}&background=3B4AF5&color=fff`}
+                      alt={user?.full_name || 'User'}
+                      className="w-8 h-8 rounded-full object-cover"
                     />
-                    <button
-                      onClick={handleAddComment}
-                      disabled={!commentText.trim()}
-                      className="px-4 py-2 bg-logic-blue text-white rounded-lg font-medium hover:bg-logic-blue-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Send
-                    </button>
+                    <div className="flex-1">
+                      <textarea
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        placeholder="Write a comment..."
+                        className="w-full border border-border rounded-lg p-2.5 text-sm placeholder-text-muted focus:border-logic-blue focus:ring-2 focus:ring-logic-blue/20 outline-none transition bg-white text-text-primary min-h-[60px] resize-y"
+                        disabled={submitting}
+                      />
+                      <div className="flex justify-end mt-2">
+                        <button
+                          type="submit"
+                          disabled={submitting || !commentText.trim()}
+                          className="bg-logic-blue text-white font-medium text-sm px-4 py-1.5 rounded-lg hover:bg-logic-blue-dark transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                        >
+                          {submitting ? (
+                            <>
+                              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <span className="material-symbols-outlined text-base">send</span>
+                              Comment
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+
+                  {/* Comments List */}
+                  <div className="space-y-3 max-h-[200px] overflow-y-auto">
+                    {comments.length === 0 ? (
+                      <p className="text-center text-text-secondary py-4 text-sm">No comments yet</p>
+                    ) : (
+                      comments.map((comment) => (
+                        <div key={comment.id} className="flex gap-3 items-start">
+                          <img
+                            src={comment.author?.avatar || `https://ui-avatars.com/api/?name=${comment.author?.full_name || 'User'}&background=3B4AF5&color=fff`}
+                            alt={comment.author?.full_name || 'User'}
+                            className="w-7 h-7 rounded-full object-cover"
+                          />
+                          <div className="flex-1 bg-surface-hover rounded-lg p-3">
+                            <div className="flex justify-between items-center mb-0.5">
+                              <span className="text-sm font-semibold text-text-primary">
+                                {comment.author?.full_name || 'Unknown'}
+                              </span>
+                              <span className="text-xs text-text-muted">
+                                {comment.created_at ? new Date(comment.created_at).toLocaleDateString() : ''}
+                              </span>
+                            </div>
+                            <p className="text-sm text-text-secondary">{comment.body}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               </>
@@ -182,6 +261,7 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
                 value={task.columnId || 'todo'}
                 onChange={(e) => handleStatusChange(e.target.value)}
                 className="w-full bg-white border border-border rounded-lg px-3 py-2 text-sm focus:border-logic-blue focus:ring-2 focus:ring-logic-blue/20 outline-none"
+                disabled={!canEdit}
               >
                 <option value="todo">To Do</option>
                 <option value="in_progress">In Progress</option>
@@ -199,11 +279,12 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
                   <button
                     key={p}
                     onClick={() => onUpdate(task.id, { priority: p })}
+                    disabled={!canEdit}
                     className={`flex-1 px-2 py-1.5 rounded-lg text-xs font-medium capitalize transition ${
                       task.priority === p
                         ? 'bg-logic-blue text-white'
                         : 'bg-white border border-border text-text-secondary hover:bg-surface-hover'
-                    }`}
+                    } ${!canEdit ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     {p}
                   </button>
@@ -229,6 +310,9 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
                     {assignee.name}
                   </span>
                 ))}
+                {(!task.assignees || task.assignees.length === 0) && (
+                  <span className="text-xs text-text-muted">No assignees</span>
+                )}
               </div>
             </div>
 
@@ -241,16 +325,30 @@ export const TaskDetail = ({ task, onClose, onUpdate, onDelete, user }) => {
                 value={task.dueDate || ''}
                 onChange={(e) => onUpdate(task.id, { due_date: e.target.value })}
                 className="w-full bg-white border border-border rounded-lg px-3 py-2 text-sm focus:border-logic-blue focus:ring-2 focus:ring-logic-blue/20 outline-none"
+                disabled={!canEdit}
               />
             </div>
 
-            <div className="border-t border-border pt-4 mt-auto">
+            <div className="border-t border-border pt-4 mt-auto space-y-2">
               <button
-                onClick={() => onDelete(task.id)}
-                className="w-full px-4 py-2 bg-error-light text-error rounded-lg font-medium hover:bg-error/10 transition"
+                onClick={handleCopyLink}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-border rounded hover:bg-surface-hover transition text-text-primary text-sm font-medium"
               >
-                Delete Task
+                <span className="material-symbols-outlined text-base">
+                  {isCopied ? 'check' : 'link'}
+                </span>
+                <span>{isCopied ? 'Link Copied!' : 'Copy Link'}</span>
               </button>
+
+              {canEdit && (
+                <button
+                  onClick={() => { onDelete(task.id); onClose(); }}
+                  className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-white border border-border rounded hover:bg-error-light hover:text-error hover:border-error/30 transition text-text-secondary text-sm font-medium"
+                >
+                  <span className="material-symbols-outlined text-base">delete</span>
+                  <span>Delete Task</span>
+                </button>
+              )}
             </div>
           </div>
         </div>

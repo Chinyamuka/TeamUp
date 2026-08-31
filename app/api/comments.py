@@ -278,7 +278,7 @@ def edit_comment(comment_id):
     """
     # Step 1: Get the current user
     current_user = get_user_from_token()
-    if not current_user):
+    if not current_user:
         return jsonify({'error': 'User not found'}), 401
     
     # Step 2: Get the comment
